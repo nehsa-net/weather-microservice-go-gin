@@ -1,3 +1,17 @@
+# The legacy API key file — never commit it
 openweatherapi.key
+
+# Build output
 weather.exe
+weather-microservice
 main
+/bin/
+
+# Coverage
+coverage.out
+coverage.html
+
+# Editors
+.idea/
+.vscode/
+.DS_Store

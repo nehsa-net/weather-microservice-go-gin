@@ -25,19 +25,33 @@ A small HTTP service that fetches current conditions from the OpenWeatherMap API
 
 ### Configuration — an API key is required
 
-The service reads an OpenWeatherMap API key from a file named **`openweatherapi.key`** in the process's working directory. The first line of the file is the key; nothing else is read.
+The service reads the OpenWeatherMap key from the **`OPENWEATHER_API_KEY`**
+environment variable:
 
 ```bash
-echo "your-openweathermap-api-key" > openweatherapi.key
+export OPENWEATHER_API_KEY="your-openweathermap-api-key"
 ```
 
-Get a free key at <https://openweathermap.org/api>. Without this file every request fails, because `getKey()` returns the string `"Error opening file"` and OpenWeatherMap rejects it.
+Get a free key at <https://openweathermap.org/api>. **The service refuses to
+start without one**, and says which variable is missing — rather than starting
+happily and turning every request into a confusing upstream 401.
 
-`openweatherapi.key` must never be committed. Confirm it is ignored before your first commit:
+For backwards compatibility it still falls back to a file named
+**`openweatherapi.key`** in the working directory, first line only, if the
+variable is unset. The environment wins when both are present.
+
+`openweatherapi.key` must never be committed. Confirm it is ignored:
 
 ```bash
 git check-ignore -v openweatherapi.key   # should print a .gitignore line
 ```
+
+**Other variables**, all optional:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `ADDR` | `:8080` | Listen address |
+| `WEATHER_UPSTREAM_URL` | `https://api.openweathermap.org` | The upstream base URL. A field rather than a constant so tests can point it at a stub |
 
 ### Run it
 
@@ -47,41 +61,117 @@ go mod download                 # fetch dependencies into the module cache
 go run .                        # starts on :8080
 ```
 
-Use `go run .` (build and run the whole package), not `go run main.go` — the entry point in this repo lives in **`weather.go`**, and `main.go` does not exist.
+Use `go run .` — it builds and runs the whole package. The entry point is `main.go`, which does nothing but read config, wire dependencies and serve; everything worth testing lives in `internal/`.
 
 ### Run it in Docker
 
 ```bash
 docker build . -t weather-microservice
 docker run --rm -p 8080:8080 \
-  -v "$PWD/openweatherapi.key:/app/openweatherapi.key:ro" \
+  -e OPENWEATHER_API_KEY="$OPENWEATHER_API_KEY" \
   weather-microservice
 ```
 
-The image sets `GIN_MODE=release`, which turns off Gin's debug logging and startup banner. The key file is *not* baked into the image on purpose — mount it, or switch to an environment variable (see "Things worth improving").
+The Dockerfile is a multi-stage build onto `distroless/static`, so the runtime
+image carries the binary and nothing else — no shell, no toolchain, no source,
+and no possibility of a key file being baked in. It sets `GIN_MODE=release` and
+runs as `nonroot`.
 
 ### Publish and deploy
 
 - `publish.ps1` builds a `linux/amd64` image tagged with a UTC-ish timestamp and pushes it to Docker Hub as `nehsa/ascii-weather`.
 - `weather-microservice.yaml` is a Kubernetes Deployment for `nehsa/ascii-weather:latest`, one replica, container port 8080.
 
-### Things worth improving
+### Endpoints for Kubernetes
 
-Noted here rather than silently fixed, since they change behaviour:
+| Endpoint | Returns |
+|---|---|
+| `GET /health` | `{"status":"ok"}` — the liveness probe |
+| `GET /ready` | `{"status":"ready"}` — the readiness probe |
 
-1. **The API key should come from the environment**, not a file — `os.Getenv("OPENWEATHER_API_KEY")` with the file as a fallback. Files get committed; environment variables are what every container platform already knows how to inject.
-2. **`getKey()` reports failure as a valid-looking string.** It returns `"Error opening file"` instead of an error, so a missing key surfaces as a confusing upstream 401 rather than a clear local one. It also re-reads and re-logs the key on *every* request — including printing it to stdout, which puts a live credential in your container logs.
-3. **`sendGetRequest` dereferences `weatherData.Weather[0]`** in its trailing log line. If OpenWeatherMap ever returns an empty `weather` array, that panics and takes the request down.
-4. **`getWeatherJson` shadows `err`** — the error from `getWeatherv25` is overwritten by the one from `json.Marshal` before it is ever checked. `go vet` will not catch this one; `errcheck` or a careful read will.
-5. **No tests.** See ["Testing"](#testing) below — `httptest` makes handler tests cheap.
+Both answer **without touching OpenWeatherMap**. That is deliberate: a probe
+that depends on a third party takes every pod out of rotation during somebody
+else's outage.
 
----
+### Layout
+
+```
+main.go                    reads config, wires dependencies, serves — nothing else
+internal/weather/
+  model.go                 pure values, parsing, conversion       (unit)
+  client.go                the ONE place that does network I/O    (unit + integration)
+  service.go               orchestration over an interface        (unit)
+internal/httpapi/router.go gin routes, status codes, query parsing (unit)
+internal/config/config.go  environment and key-file resolution     (unit)
+test/integration/          //go:build integration
+test/e2e/                  //go:build e2e
+```
+
+### Testing this service
+
+```bash
+make test              # unit tier — 83 cases, no network, no setup
+make test-integration  # the assembled stack against a stubbed upstream
+make test-e2e          # builds the binary and drives it over HTTP
+make test-all          # all three, fastest failure first
+make cover             # coverage summary
+make ci                # what the GitHub workflow runs
+```
+
+103 tests pass in total: 83 unit, 10 integration, 10 e2e. Unit statement
+coverage is 76.2%; the uncovered remainder is `main.go`, which the e2e tier
+covers as a process.
+
+**The pattern is documented in full at `github.com/nehsa-net/test-go`** — this
+service follows it, and that repo explains why each tier exists and what each
+one can prove that the others cannot.
+
+### What changed to make this testable
+
+The service previously had no tests, and could not have had useful ones: the
+code that made decisions and the code that did I/O were the same code. Four
+seams were introduced.
+
+1. **The module path.** It was `module main`, which nothing can import — so no
+   test file could reach any of it. It is now
+   `github.com/nehsa-net/weather-microservice-go-gin`.
+2. **The upstream URL is a field, not a constant.** `Client.BaseURL` is the
+   single change that makes the integration and e2e tiers possible: a test
+   points it at an `httptest.Server`.
+3. **The HTTP client is an interface.** `weather.Doer` is one method wide, so a
+   test can inject a stub — and production passes `*http.Client` unchanged.
+4. **Handlers are named functions taking a service.** They were closures inside
+   `main()`, where no test could reach them.
+
+Five real defects were fixed on the way, each with a regression test:
+
+- **A panic on any error payload.** `weatherData.Weather[0]` was indexed
+  unchecked, so an empty `weather` array took the process down.
+- **The API key leaked to callers.** Handlers returned `err.Error()` verbatim,
+  and the wrapped error carried the full request URL — `appid` included — on
+  any transport failure. Errors now map to a status code and a flat sentence,
+  with the cause going to the log.
+- **The key was printed to stdout on every request**, putting a live credential
+  in the container logs, and re-read from disk each time.
+- **A shadowed `err` in `getWeatherJson`** meant a fetch failure was overwritten
+  by the marshalling result and never checked.
+- **No timeout on the upstream call.** A hung upstream held the request open
+  indefinitely.
+
+And two things outside the Go code:
+
+- **`/health` and `/ready` did not exist**, though the Kubernetes manifest has
+  probed them since it was written — so liveness 404'd and would have restarted
+  the pod in a loop.
+- **`weather-microservice.yaml` was not valid YAML.** The indentation put
+  `labels`, `app` and the container block at the wrong depth; `kubectl apply`
+  would have rejected it.
 
 ## Part 2 — Go reference
 
 Everything below is general-purpose Go. It is deliberately self-contained.
 
-> Written against **Go 1.22+**, the version this module targets (`go 1.22.6` in `go.mod`). Go is exceptionally stable — the Go 1 compatibility promise means code written for 1.0 in 2012 still compiles today — so almost all of this stays true across versions. Version-specific notes are called out inline.
+> Written against **Go 1.24+**, the version this module targets (`go 1.24` in `go.mod`). Go is exceptionally stable — the Go 1 compatibility promise means code written for 1.0 in 2012 still compiles today — so almost all of this stays true across versions. Version-specific notes are called out inline.
 
 ### What Go is, and when to reach for it
 
@@ -198,8 +288,8 @@ myproject/
 `go.mod` for this repo:
 
 ```
-module main
-go 1.22.6
+module github.com/nehsa-net/weather-microservice-go-gin
+go 1.24
 require github.com/gin-gonic/gin v1.10.0
 ```
 

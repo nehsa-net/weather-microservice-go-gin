@@ -1,0 +1,33 @@
+version: "2"
+
+run:
+  timeout: 5m
+  # Without this, every linter silently skips the integration and e2e files and
+  # a clean report means "we checked one third of the suite".
+  build-tags:
+    - integration
+    - e2e
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose   # an unclosed HTTP body leaks a connection per request
+    - errorlint   # catches err == ErrFoo where errors.Is is required
+    - noctx       # catches http.Get with no context
+    - thelper
+    - tparallel
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
