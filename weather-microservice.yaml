@@ -1,47 +1,59 @@
+# The indentation in this file was previously invalid YAML — `labels`, `app`
+# and the whole container block sat at the wrong depth, so `kubectl apply`
+# would reject it. It is corrected here, along with the probe paths, which now
+# exist in the service (/health and /ready).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-    name: weather-microservice
-    labels:
+  name: weather-microservice
+  labels:
     app: weather-microservice
 spec:
-    replicas: 1 
-    selector:
-        matchLabels:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: weather-microservice
+  template:
+    metadata:
+      labels:
         app: weather-microservice
-    template: 
-        metadata:
-        labels:
-            app: weather-microservice
-        spec:
-        containers:
+    spec:
+      containers:
         - name: weather-microservice
-            image:  nehsa/ascii-weather:latest
-            ports:
+          image: nehsa/ascii-weather:latest
+          ports:
             - containerPort: 8080
-            resources:
-                requests:
-                cpu: "100m"
-                memory: "256Mi"
-                limits:
-                cpu: "200m"
-                memory: "512Mi"
-            livenessProbe:
-                httpGet:
-                path: /health
-                port: 8080
-                initialDelaySeconds: 15
-                periodSeconds: 30
-                failureThreshold: 3
-                successThreshold: 1
-                timeoutSeconds: 5
-            readinessProbe:
-                httpGet:
-                path: /ready
-                port: 8080
-                initialDelaySeconds: 5
-                periodSeconds: 10
-                failureThreshold: 3
-                successThreshold: 1
-                timeoutSeconds: 2
-                
+          env:
+            # The key is read from the environment. Create the secret with:
+            #   kubectl create secret generic weather-microservice \
+            #     --from-literal=api-key=<key>
+            - name: OPENWEATHER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: weather-microservice
+                  key: api-key
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "200m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            failureThreshold: 3
+            successThreshold: 1
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+            successThreshold: 1
+            timeoutSeconds: 2
