@@ -57,9 +57,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: golangci/golangci-lint-action@v6
+      # Pin BOTH the action major and the golangci-lint version.
+      #
+      # Action v6 installs golangci-lint v1, which cannot read this repo's
+      # `version: "2"` .golangci.yml and fails with a jsonschema error. And
+      # `version: latest` is a second trap: the released binary is built with
+      # whatever Go its maintainers used, and golangci-lint refuses to run when
+      # that is older than the `go` directive in go.mod. Either way a repo can
+      # be lint-clean locally and red in CI. Pinning both makes the pairing
+      # explicit and reviewable.
+      - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.12.2
 
   integration:
     name: Integration tier
