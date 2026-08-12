@@ -115,12 +115,18 @@ make test-integration  # the assembled stack against a stubbed upstream
 make test-e2e          # builds the binary and drives it over HTTP
 make test-all          # all three, fastest failure first
 make cover             # coverage summary
-make ci                # what the GitHub workflow runs
+make ci                # the full gate — run this before every commit
 ```
 
 103 tests pass in total: 83 unit, 10 integration, 10 e2e. Unit statement
 coverage is 76.2%; the uncovered remainder is `main.go`, which the e2e tier
 covers as a process.
+
+**GitHub Actions is disabled on this repository**, so nothing runs on push and
+`make ci` is the only gate. Run it before every commit. The workflow file is
+kept as reference and has been verified by running it in a real runner
+container with [`act`](https://github.com/nektos/act); it is simply not
+switched on.
 
 **The pattern is documented in full at `github.com/nehsa-net/test-go`** — this
 service follows it, and that repo explains why each tier exists and what each
