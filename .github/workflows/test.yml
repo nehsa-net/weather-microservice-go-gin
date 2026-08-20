@@ -3,8 +3,10 @@ name: Tests
 on:
   push:
     branches: [main]
+  # Unscoped on purpose. `branches: [main]` exempts a PR stacked on another
+  # branch — the one most likely to need checking — and that PR then merges
+  # with zero checks reported.
   pull_request:
-    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
